@@ -1,0 +1,101 @@
+@page "/file-upload-3"
+@using System 
+@using System.IO
+@using Azure.Storage.Blobs
+@using Azure.Storage.Blobs.Models
+@using Microsoft.AspNetCore.Hosting
+@using Microsoft.Extensions.Logging
+@inject ILogger<FileUpload> Logger
+@inject IWebHostEnvironment Environment
+@using Microsoft.Extensions.Configuration
+@inject IConfiguration Configuration
+
+<h3>Upload Files</h3>
+
+<p>
+    <label>
+        Max file size:
+        <input type="number" @bind="maxFileSize" />
+    </label>
+</p>
+
+<p>
+    <label>
+        Max allowed files:
+        <input type="number" @bind="maxAllowedFiles" />
+    </label>
+</p>
+
+<p>
+    <label>
+        Upload up to @maxAllowedFiles of up to @maxFileSize bytes:
+        <InputFile OnChange="@LoadFiles" multiple />
+    </label>
+</p>
+
+@if (isLoading)
+{
+    <p>Progress: @string.Format("{0:P0}", progressPercent)</p>
+}
+else
+{
+    <ul>
+        @foreach (var file in loadedFiles)
+        {
+            <li>
+                <ul>
+                    <li>Name: @file.Name</li>
+                    <li>Last modified: @file.LastModified.ToString()</li>
+                    <li>Size (bytes): @file.Size</li>
+                    <li>Content type: @file.ContentType</li>
+                </ul>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    private List<IBrowserFile> loadedFiles = new();
+    private long maxFileSize = 1024 * 15;
+    private int maxAllowedFiles = 3;
+    private bool isLoading;
+    private decimal progressPercent;
+
+    private async Task LoadFiles(InputFileChangeEventArgs e)
+    {
+        isLoading = true;
+        loadedFiles.Clear();
+        progressPercent = 0;
+		string azConnStr = Configuration.GetConnectionString("AzureConnectionString");
+
+        foreach (var file in e.GetMultipleFiles(maxAllowedFiles))
+        {
+            try
+            {
+				var container = new BlobContainerClient(azConnStr, "uploadvideos");
+				var createResponse = await container.CreateIfNotExistsAsync();
+            	if(createResponse != null && createResponse.GetRawResponse().Status == 201){
+					await container.SetAccessPolicyAsync(Azure.Storage.Blobs.Models.PublicAccessType.Blob);
+				}
+                	
+				var blob = container.GetBlobClient(file.Name);
+				await blob.DeleteIfExistsAsync(DeleteSnapshotsOption.IncludeSnapshots);
+				using (var fileStream = file.OpenReadStream())
+				{
+					await blob.UploadAsync(fileStream, new BlobHttpHeaders { ContentType = file.ContentType });
+				}
+
+				//progressPercent = Decimal.Divide(totalRead, file.Size);                
+
+                loadedFiles.Add(file);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError("File: {Filename} Error: {Error}", 
+                    file.Name, ex.Message);
+            }
+        }
+
+        isLoading = false;
+    }
+}
